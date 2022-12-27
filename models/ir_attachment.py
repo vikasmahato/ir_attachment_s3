@@ -9,9 +9,9 @@
 import logging
 
 from odoo import _, models
-from odoo.exceptions import MissingError
+from odoo.exceptions import MissingError, UserError
 from odoo.tools.safe_eval import safe_eval
-import uuid
+from botocore.exceptions import ClientError
 import base64
 from .res_config_settings import NotAllCredentialsGiven
 
@@ -35,6 +35,32 @@ class IrAttachment(models.Model):
                       and not r.name.startswith("/web/content/")
                       and not r.name.startswith("/web/static/")
         )
+
+    def _get_datas_related_values_with_bucket(
+            self, bucket, data, filename, mimetype, checksum=None
+    ):
+        bin_data = base64.b64decode(data) if data else b""
+        if not checksum:
+            checksum = self._compute_checksum(bin_data)
+        fname, url = self._file_write_with_bucket(
+            bucket, bin_data, filename, mimetype, checksum
+        )
+        return {
+            "file_size": len(bin_data),
+            "checksum": checksum,
+            "index_content": self._index(bin_data, mimetype),
+            "store_fname": fname,
+            "db_datas": False,
+            "type": "binary",
+            "url": url,
+        }
+
+    def _write_records_with_bucket(self, bucket):
+        for attach in self:
+            vals = self._get_datas_related_values_with_bucket(
+                bucket, attach.datas, attach.name, attach.mimetype
+            )
+            super(IrAttachment, attach.sudo()).write(vals)
 
     def _inverse_datas(self):
         condition = self.env["res.config.settings"]._get_s3_settings(
@@ -118,6 +144,37 @@ class IrAttachment(models.Model):
         obj = bucket.Object(file_id)
         obj.delete()
 
+    def _force_storage_with_bucket(self, bucket, domain):
+        attachment_ids = self._search(domain)
+
+        _logger.info(
+            "Approximately %s attachments to store to %s"
+            % (len(attachment_ids), repr(bucket))
+        )
+        for attach in map(self.browse, attachment_ids):
+            is_protected = not bool(attach._filter_protected_attachments())
+
+            if is_protected:
+                _logger.info("ignoring protected attachment %s", repr(attach))
+                continue
+            else:
+                _logger.info("storing %s", repr(attach))
+
+            old_store_fname = attach.store_fname
+            data = self._file_read(old_store_fname)
+            bin_data = base64.b64decode(data) if data else b""
+            checksum = (
+                self._compute_checksum(bin_data)
+                if not attach.checksum
+                else attach.checksum
+            )
+
+            new_store_fname, url = self._file_write_with_bucket(
+                bucket, bin_data, attach.name, attach.mimetype, checksum
+            )
+            attach.write({"store_fname": new_store_fname, "url": url})
+            self._file_delete(old_store_fname)
+
     def force_storage_s3(self):
         try:
             bucket = self.env["res.config.settings"].get_s3_bucket()
@@ -172,15 +229,17 @@ class IrAttachment(models.Model):
             )
 
         file_id = "odoo/{}".format(checksum)
+        try:
+            bucket.put_object(
+                Key=file_id,
+                Body=bin_data,
+                ACL="public-read",
+                ContentType=mimetype,
+                ContentDisposition='attachment; filename="%s"' % filename,
+            )
 
-        bucket.put_object(
-            Key=file_id,
-            Body=bin_data,
-            ACL="public-read",
-            ContentType=mimetype,
-            ContentDisposition='attachment; filename="%s"' % filename,
-        )
-
-        _logger.debug("uploaded file with id {}".format(file_id))
-        obj_url = self.env["res.config.settings"].get_s3_obj_url(bucket, file_id)
-        return PREFIX + file_id, obj_url
+            _logger.debug("uploaded file with id {}".format(file_id))
+            obj_url = self.env["res.config.settings"].get_s3_obj_url(bucket, file_id)
+            return PREFIX + file_id, obj_url
+        except ClientError as e:
+            raise UserError(_(e) + ". This happened while trying to upload attachment to S3")

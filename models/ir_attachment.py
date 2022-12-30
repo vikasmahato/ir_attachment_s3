@@ -245,6 +245,9 @@ class IrAttachment(models.Model):
 
             _logger.debug("evt=UPLOAD_TO_S3 msg=uploaded file with id {}".format(file_id))
             obj_url = self.env["res.config.settings"].get_s3_obj_url(bucket, file_id)
+
+            _logger.debug("evt=UPLOAD_TO_S3 store_fname={} url={}".format(PREFIX + file_id, obj_url))
+
             return PREFIX + file_id, obj_url
         except ClientError as e:
             raise UserError(_(e) + ". This happened while trying to upload attachment to S3")

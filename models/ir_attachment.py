@@ -112,6 +112,7 @@ class IrAttachment(models.Model):
 
     def _file_write(self, bin_value, checksum):
         storage = self._storage()
+        _logger.info("evt=UPLOAD_TO_S3 msg=_file_write")
         try:
             bucket = self.env["res.config.settings"].get_s3_bucket()
             fname = "odoo/{}".format(checksum)

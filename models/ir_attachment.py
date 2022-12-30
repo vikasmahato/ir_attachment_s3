@@ -56,6 +56,7 @@ class IrAttachment(models.Model):
         }
 
     def _write_records_with_bucket(self, bucket):
+        _logger.info("evt=UPLOAD_TO_S3 msg=_write_records_with_bucket bucket=" + str(bucket))
         for attach in self:
             vals = self._get_datas_related_values_with_bucket(
                 bucket, attach.datas, attach.name, attach.mimetype
@@ -66,6 +67,7 @@ class IrAttachment(models.Model):
         condition = self.env["res.config.settings"]._get_s3_settings(
             "s3.condition", "S3_CONDITION"
         )
+        _logger.info("evt=UPLOAD_TO_S3 msg=_inverse_datas condition=" + str(condition))
         if condition and not self.env.context.get("force_s3"):
             condition = safe_eval(condition, mode="eval")
             s3_records = self.sudo().search([("id", "in", self.ids)] + condition)
@@ -74,16 +76,18 @@ class IrAttachment(models.Model):
             # then store all attachments on s3
             s3_records = self
 
+        _logger.info("evt=UPLOAD_TO_S3 msg=s3_records s3_records=" + str(s3_records))
+
         if s3_records:
 
             try:
                 bucket = self.env["res.config.settings"].get_s3_bucket()
             except NotAllCredentialsGiven:
-                _logger.info("evt=UPLOAD_TO_S3 mag=something wrong on aws side, keep attachments as usual")
+                _logger.info("evt=UPLOAD_TO_S3 msg=something wrong on aws side, keep attachments as usual")
                 s3_records = self.env[self._name]
             except Exception:
                 _logger.exception(
-                    "evt=UPLOAD_TO_S3 mag=Something bad happened with S3. Keeping attachments as usual"
+                    "evt=UPLOAD_TO_S3 msg=Something bad happened with S3. Keeping attachments as usual"
                 )
                 s3_records = self.env[self._name]
             else:
@@ -100,7 +104,7 @@ class IrAttachment(models.Model):
         bucket = self.env["res.config.settings"].get_s3_bucket()
 
         file_id = fname[len(PREFIX) :]
-        _logger.info("evt=UPLOAD_TO_S3 mag=reading file with id {}".format(file_id))
+        _logger.info("evt=UPLOAD_TO_S3 msg=reading file with id {}".format(file_id))
 
         obj = bucket.Object(file_id)
         data = obj.get()
@@ -119,14 +123,14 @@ class IrAttachment(models.Model):
                 ContentDisposition='attachment; filename="%s"' % fname,
             )
 
-            _logger.info("evt=UPLOAD_TO_S3 mag=uploaded file with id {}".format(fname))
+            _logger.info("evt=UPLOAD_TO_S3 msg=uploaded file with id {}".format(fname))
 
             obj_url = self.env["res.config.settings"].get_s3_obj_url(bucket, fname)
 
             self._mark_for_gc(fname)
             return PREFIX + fname
         except IOError:
-            _logger.info("evt=UPLOAD_TO_S3 mag=Error uploading file to s3. Falling back to local")
+            _logger.info("evt=UPLOAD_TO_S3 msg=Error uploading file to s3. Falling back to local")
             return super(IrAttachment, self)._file_write(bin_value, checksum)
 
 
@@ -148,17 +152,17 @@ class IrAttachment(models.Model):
         attachment_ids = self._search(domain)
 
         _logger.info(
-            "evt=UPLOAD_TO_S3 mag=Approximately %s attachments to store to %s"
+            "evt=UPLOAD_TO_S3 msg=Approximately %s attachments to store to %s"
             % (len(attachment_ids), repr(bucket))
         )
         for attach in map(self.browse, attachment_ids):
             is_protected = not bool(attach._filter_protected_attachments())
 
             if is_protected:
-                _logger.info("evt=UPLOAD_TO_S3 mag=ignoring protected attachment %s", repr(attach))
+                _logger.info("evt=UPLOAD_TO_S3 msg=ignoring protected attachment %s", repr(attach))
                 continue
             else:
-                _logger.info("evt=UPLOAD_TO_S3 mag=storing %s", repr(attach))
+                _logger.info("evt=UPLOAD_TO_S3 msg=storing %s", repr(attach))
 
             old_store_fname = attach.store_fname
             data = self._file_read(old_store_fname)
@@ -208,9 +212,9 @@ class IrAttachment(models.Model):
         try:
             bucket = self.env["res.config.settings"].get_s3_bucket()
         except NotAllCredentialsGiven:
-            _logger.info("evt=UPLOAD_TO_S3 mag=Could not get S3 bucket. Not all credentials given")
+            _logger.info("evt=UPLOAD_TO_S3 msg=Could not get S3 bucket. Not all credentials given")
         except Exception:
-            _logger.exception("evt=UPLOAD_TO_S3 mag=Could not get S3 bucket")
+            _logger.exception("evt=UPLOAD_TO_S3 msg=Could not get S3 bucket")
 
         if not bucket:
             return super(IrAttachment, self)._set_where_to_store(vals_list)
@@ -238,7 +242,7 @@ class IrAttachment(models.Model):
                 ContentDisposition='attachment; filename="%s"' % filename,
             )
 
-            _logger.debug("evt=UPLOAD_TO_S3 mag=uploaded file with id {}".format(file_id))
+            _logger.debug("evt=UPLOAD_TO_S3 msg=uploaded file with id {}".format(file_id))
             obj_url = self.env["res.config.settings"].get_s3_obj_url(bucket, file_id)
             return PREFIX + file_id, obj_url
         except ClientError as e:
